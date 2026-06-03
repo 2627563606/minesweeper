@@ -311,7 +311,7 @@ function init() {
 
     /** 保存当前难度和模式偏好到 localStorage */
     function savePreferences() {
-        const prefs = { difficulty: currentDifficulty, noGuessMode: noGuessMode };
+        const prefs = { difficulty: currentDifficulty, noGuessMode: noGuessMode, zoomLevel: currentZoom };
         if (currentDifficulty === 'custom') {
             prefs.customRows = Number(document.getElementById('customRows')?.value) || 9;
             prefs.customCols = Number(document.getElementById('customCols')?.value) || 9;
@@ -337,6 +337,42 @@ function init() {
             }
         }
     } catch (_) { /* 静默失败 */ }
+
+    // ---- 棋盘缩放（Ctrl + 滚轮） ----
+    const ZOOM_MIN = 16;
+    const ZOOM_MAX = 48;
+    const ZOOM_DEFAULT = 28;
+    const ZOOM_STEP = 2;
+
+    let currentZoom = ZOOM_DEFAULT;
+    // 从偏好恢复上次缩放级别
+    try {
+        const raw = localStorage.getItem(PREF_KEY);
+        if (raw) {
+            const prefs = JSON.parse(raw);
+            if (typeof prefs.zoomLevel === 'number') {
+                currentZoom = prefs.zoomLevel;
+            }
+        }
+    } catch (_) { /* 静默失败 */ }
+
+    /**
+     * 设置棋盘缩放（更新 CSS 变量 --cell-size 和 --cell-font-size）
+     * @param {number} level  px 值
+     * @returns {number} 实际应用的缩放级别（clamped）
+     */
+    function setZoomLevel(level) {
+        const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(level)));
+        document.documentElement.style.setProperty('--cell-size', `${clamped}px`);
+        // 字体按基础比例 16/28 同步缩放
+        const fontSize = Math.round(clamped * 16 / 28);
+        document.documentElement.style.setProperty('--cell-font-size', `${fontSize}px`);
+        currentZoom = clamped;
+        return clamped;
+    }
+
+    // 立即应用上次保存的缩放级别
+    setZoomLevel(currentZoom);
 
     let game;
     if (savedCustom) {
@@ -530,17 +566,6 @@ function init() {
     let hoveredCellEl = null;
     let hoverR = -1;
     let hoverC = -1;
-    let chordTriggered = false;
-    let chordResetTimer = null;
-
-    /**
-     * 标记和弦已触发，屏蔽后续 click / contextmenu，100ms 后自动重置
-     */
-    function markChordTriggered() {
-        chordTriggered = true;
-        clearTimeout(chordResetTimer);
-        chordResetTimer = setTimeout(() => { chordTriggered = false; }, 100);
-    }
 
     // ---- 常亮锁定集合 ----
     /** @type {Set<string>} 存储 "r,c" 格式的锁定坐标 */
@@ -606,16 +631,31 @@ function init() {
 
     /**
      * 清除棋盘上所有高亮（含智能安全区）
+     * 自动检测 DOM 是否已被 renderBoard 重建，跳过对已脱离 DOM 元素的无效操作
      */
     function clearAllHighlights() {
+        // 快速检测：若所有元素已脱离 DOM（renderBoard 重建），直接清空集合
+        let needDOM = false;
         for (const el of highlightedCells) {
-            el.classList.remove(...HOVER_CLASSES);
-            delete el.dataset.highlightPriority;
+            if (el.isConnected) { needDOM = true; break; }
         }
+        if (!needDOM) {
+            for (const el of smartSafeCells) {
+                if (el.isConnected) { needDOM = true; break; }
+            }
+        }
+
+        if (needDOM) {
+            for (const el of highlightedCells) {
+                el.classList.remove(...HOVER_CLASSES);
+                delete el.dataset.highlightPriority;
+            }
+            for (const el of smartSafeCells) {
+                el.classList.remove('cell--smart-safe');
+            }
+        }
+
         highlightedCells.clear();
-        for (const el of smartSafeCells) {
-            el.classList.remove('cell--smart-safe');
-        }
         smartSafeCells.clear();
     }
 
@@ -644,41 +684,6 @@ function init() {
                 }
             }
         }
-    }
-
-    /**
-     * 收集所有锁定格的高亮隐藏邻居坐标键集合
-     * @returns {Set<string>}
-     */
-    function collectAllLockedHighlightedKeys() {
-        const keys = new Set();
-        for (const key of lockedCells) {
-            const [lr, lc] = key.split(',').map(Number);
-            const cell = game.grid[lr][lc];
-            if (cell.state !== CellState.REVEALED || cell.adjacentMines <= 0) continue;
-            const flagged = game._countFlaggedNeighbors(lr, lc);
-            if (cell.adjacentMines - flagged <= 0) continue; // 剩余 0 雷，高亮区全安全
-            for (const { r: nr, c: nc } of game._getNeighbors(lr, lc)) {
-                if (game.grid[nr][nc].state === CellState.HIDDEN) {
-                    keys.add(`${nr},${nc}`);
-                }
-            }
-        }
-        return keys;
-    }
-
-    /**
-     * 计算集合 A 中被锁定高亮覆盖的格子数（即含雷估算量）
-     * @param {Set<string>} hiddenKeys  N_A 的隐藏邻居键集
-     * @param {Set<string>} lockedKeys  所有锁定高亮的隐藏邻居键集
-     * @returns {number}
-     */
-    function countHighlightedOverlap(hiddenKeys, lockedKeys) {
-        let count = 0;
-        for (const key of hiddenKeys) {
-            if (lockedKeys.has(key)) count++;
-        }
-        return count;
     }
 
     /**
@@ -872,34 +877,66 @@ function init() {
                         el.classList.remove('cell--chord-reject');
                         void el.offsetWidth;
                         el.classList.add('cell--chord-reject');
+                        el.addEventListener('animationend', () => {
+                            el.classList.remove('cell--chord-reject');
+                        }, { once: true });
                     }
                 }
             }
         }
     }
 
+    // ---- 待处理的格子操作（mousedown 记录，mouseup 执行，拖动时自动取消） ----
+    /** @type {{ button: number, r: number, c: number } | null} */
+    let pendingCellAction = null;
+
     boardEl.addEventListener('mousedown', (e) => {
-        // 如果正在查看对局记录，点击棋盘 = 退出查看 + 开始新游戏
+        // 查看对局记录时点击 → 退出查看 + 新游戏
         if (isViewingRecord) {
             exitRecordView();
             newGame();
+            pendingCellAction = null;
             return;
         }
 
-        // 游戏已结束（胜利或失败），忽略棋盘点击（避免重复触发结束动画）
-        if (game.gameOver || game.won) return;
+        // 游戏已结束，忽略所有棋盘点击
+        if (game.gameOver || game.won) {
+            pendingCellAction = null;
+            return;
+        }
 
         const cellEl = e.target.closest('.cell');
-        if (!cellEl) return;
+        if (!cellEl) {
+            pendingCellAction = null;
+            return;
+        }
 
-        const r = Number(cellEl.dataset.row);
-        const c = Number(cellEl.dataset.col);
-        const cell = game.grid[r][c];
+        // 右键 / 中键在 mousedown 阶段阻止默认行为（上下文菜单 / 自动滚动）
+        if (e.button === INPUT_CONFIG.flagButton || e.button === INPUT_CONFIG.chordButton) {
+            e.preventDefault();
+        }
+
+        // 仅记录待处理操作，不执行任何游戏逻辑
+        pendingCellAction = {
+            button: e.button,
+            r: Number(cellEl.dataset.row),
+            c: Number(cellEl.dataset.col),
+        };
+    });
+
+    document.addEventListener('mouseup', () => {
+        // 拖动中 / 无待处理操作 → 跳过
+        if (!pendingCellAction) return;
+
+        const { button, r, c } = pendingCellAction;
+        pendingCellAction = null;
+
+        // 棋盘可能已被 renderBoard 重建，重新获取格子状态
+        const cell = game.grid[r]?.[c];
+        if (!cell) return;
 
         // ---- 左键：揭开（隐藏格） / 和弦（数字格） ----
-        if (e.button === INPUT_CONFIG.revealButton) {
-            if (chordTriggered) return;
-
+        if (button === INPUT_CONFIG.revealButton) {
             // 已揭开数字格 → 和弦展开
             if (cell.state === CellState.REVEALED && cell.adjacentMines > 0) {
                 executeChord(r, c);
@@ -922,8 +959,7 @@ function init() {
         }
 
         // ---- 中键：锁定/解锁数字高亮 ----
-        if (e.button === INPUT_CONFIG.chordButton) {
-            e.preventDefault();
+        if (button === INPUT_CONFIG.chordButton) {
             if (cell.state !== CellState.REVEALED || cell.adjacentMines <= 0) return;
 
             const key = lockKey(r, c);
@@ -941,10 +977,7 @@ function init() {
         }
 
         // ---- 右键：旗标 / 数字格一键插旗 ----
-        if (e.button === INPUT_CONFIG.flagButton) {
-            e.preventDefault();
-            if (chordTriggered) return;
-
+        if (button === INPUT_CONFIG.flagButton) {
             // 已揭开数字格：智能一键插旗
             if (cell.state === CellState.REVEALED && cell.adjacentMines > 0) {
                 const remaining = cell.adjacentMines - game._countFlaggedNeighbors(r, c);
@@ -955,45 +988,32 @@ function init() {
 
                 if (hiddenNeighbors.length === 0) return;
 
-                // 1️⃣ 基础条件：剩余雷数 = 未揭格数 → 全插旗
-                // 放在 smartFlag 之前，避免 smartFlag 仅插部分旗后 return，
-                // 导致"2 格 = 2 雷"这种确定全雷的情况只插了 1 格
-                let shouldFlag = remaining === hiddenNeighbors.length;
-                let targets = hiddenNeighbors;
+                let anyFlagged = false;
 
-                if (!shouldFlag) {
-                    // 2️⃣ 集合子集推演 — 数学证明某些格子绝对危险
-                    const smartFlagResult = game.smartFlag(r, c);
-                    if (smartFlagResult.success && smartFlagResult.flagged > 0) {
-                        recordAction('auto-flag', r, c);
-                        renderBoard(game);
-                        renderStatus(game);
-                        refreshLockedHighlights();
-                        checkFlagMatchAutoUnlock();
-                        return;
+                // 1️⃣ 集合子集推演 — 数学证明某些格子绝对危险（优先运行）
+                const smartFlagResult = game.smartFlag(r, c);
+                if (smartFlagResult.success && smartFlagResult.flagged > 0) {
+                    anyFlagged = true;
+                    // smartFlag 可能仅标识了部分危险格，检查剩余格子是否也全为雷
+                    const postRemaining = cell.adjacentMines - game._countFlaggedNeighbors(r, c);
+                    const postHidden = game._getNeighbors(r, c)
+                        .filter(({ r: nr, c: nc }) => game.grid[nr][nc].state === CellState.HIDDEN);
+                    if (postRemaining === postHidden.length && postHidden.length > 0) {
+                        for (const { r: nr, c: nc } of postHidden) {
+                            game.grid[nr][nc].state = CellState.FLAGGED;
+                        }
                     }
                 }
 
-                // 进阶条件：扣除锁定高亮区含雷量后，非高亮格数 = 剩余雷数
-                if (!shouldFlag) {
-                    const hiddenKeys = new Set(hiddenNeighbors.map(({ r: nr, c: nc }) => `${nr},${nc}`));
-                    const lockedKeys = collectAllLockedHighlightedKeys();
-                    const highlightedCount = countHighlightedOverlap(hiddenKeys, lockedKeys);
-                    const nonHighlightedCount = hiddenNeighbors.length - highlightedCount;
-
-                    if (nonHighlightedCount === remaining - highlightedCount && nonHighlightedCount > 0) {
-                        shouldFlag = true;
-                        targets = hiddenNeighbors.filter(
-                            ({ r: nr, c: nc }) => !lockedKeys.has(`${nr},${nc}`)
-                        );
-                    }
-                }
-
-                if (shouldFlag) {
-                    // 条件满足 → 一键插旗
-                    for (const { r: nr, c: nc } of targets) {
+                // 2️⃣ 基础条件回退：若 smartFlag 未找到任何危险格，且剩余雷数 = 未揭格数 → 全插旗
+                if (!anyFlagged && remaining === hiddenNeighbors.length) {
+                    for (const { r: nr, c: nc } of hiddenNeighbors) {
                         game.grid[nr][nc].state = CellState.FLAGGED;
                     }
+                    anyFlagged = true;
+                }
+
+                if (anyFlagged) {
                     recordAction('auto-flag', r, c);
                     renderBoard(game);
                     renderStatus(game);
@@ -1007,6 +1027,9 @@ function init() {
                             el.classList.remove('cell--flag-reject');
                             void el.offsetWidth;
                             el.classList.add('cell--flag-reject');
+                            el.addEventListener('animationend', () => {
+                                el.classList.remove('cell--flag-reject');
+                            }, { once: true });
                         }
                     }
                 }
@@ -1025,6 +1048,18 @@ function init() {
 
     // 阻止浏览器默认右键菜单
     boardEl.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // ---- Ctrl + 滚轮缩放棋盘 ----
+    let _zoomSaveTimer = null;
+    document.addEventListener('wheel', (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        const direction = e.deltaY > 0 ? -1 : 1; // 向上滚动 = 放大
+        setZoomLevel(currentZoom + direction * ZOOM_STEP);
+        // 去抖持久化（500ms 合并窗口）
+        clearTimeout(_zoomSaveTimer);
+        _zoomSaveTimer = setTimeout(() => savePreferences(), 500);
+    }, { passive: false });
 
     // ---- 新游戏按钮 ----
     document.getElementById('btnNewGame').addEventListener('click', () => {
@@ -1427,6 +1462,56 @@ function init() {
 
         // 点击记录行本身 → 进入查看模式
         enterRecordView(rec);
+    });
+
+    // ---- 棋盘拖动（左键拖动游戏容器，刷新后复位） ----
+    const gameContainer = document.querySelector('.game-container');
+    const DRAG_THRESHOLD = 4; // px，超过此距离视为拖动
+    let dragActive = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let boardTranslateX = 0;
+    let boardTranslateY = 0;
+
+    gameContainer.addEventListener('mousedown', (e) => {
+        // 仅左键拖动
+        if (e.button !== 0) return;
+        // 不在按钮、输入框等交互元素上触发拖动
+        if (e.target.closest('button, input, textarea, select, label')) return;
+
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        dragActive = false;
+
+        const onMouseMove = (ev) => {
+            const dx = ev.clientX - dragStartX;
+            const dy = ev.clientY - dragStartY;
+
+            if (!dragActive && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+                dragActive = true;
+                pendingCellAction = null; // 拖动开始 → 取消格子操作
+                gameContainer.classList.add('game-container--dragging');
+            }
+
+            if (dragActive) {
+                boardTranslateX += dx;
+                boardTranslateY += dy;
+                gameContainer.style.transform = `translate(${boardTranslateX}px, ${boardTranslateY}px)`;
+                dragStartX = ev.clientX;
+                dragStartY = ev.clientY;
+            }
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            if (dragActive) {
+                gameContainer.classList.remove('game-container--dragging');
+            }
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
     });
 
     // ---- 初始渲染 ----

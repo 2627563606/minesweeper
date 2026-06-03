@@ -21,6 +21,27 @@
                     <div class="announce-list" id="announceList"></div>
                 </div>
             </div>
+            <!-- 新手指引 -->
+            <div class="submenu" data-submenu="guide">
+                <button class="submenu-header" type="button">🎓 新手指引 <span class="submenu-arrow">▶</span></button>
+                <div class="submenu-body">
+                    <div class="guide-content">
+                        <table class="guide-table">
+                            <tr><td class="guide-key">左键</td><td>揭开格子</td></tr>
+                            <tr><td class="guide-key">右键</td><td>插旗 / 取消旗标</td></tr>
+                            <tr><td class="guide-key">中键</td><td>锁定数字格，3×3 区域高亮标记</td></tr>
+                            <tr><td class="guide-key">左键·已揭数字</td><td>和弦展开（旗数 = 数字时自动揭开余格）</td></tr>
+                            <tr><td class="guide-key">右键·已揭数字</td><td>一键智能插旗</td></tr>
+                            <tr><td class="guide-key">左键拖动</td><td>拖动棋盘在界面中的位置</td></tr>
+                            <tr><td class="guide-key">Ctrl + 滚轮</td><td>缩放棋盘</td></tr>
+                        </table>
+                        <hr class="guide-divider">
+                        <p class="guide-tip">💡 悬停数字格可查看危险区域（按剩余雷数分 7 级高亮）</p>
+                        <p class="guide-tip">💡 同时锁定多个数字格，悬停另一数字可显示交叉推演的安全区（白色）</p>
+                        <p class="guide-tip">💡 开启"无死局模式"后棋盘将动态生成，保证每步均可纯逻辑推演</p>
+                    </div>
+                </div>
+            </div>
             <!-- 难度 -->
             <div class="submenu" data-submenu="difficulty">
                 <button class="submenu-header" type="button">🎯 难度 <span class="submenu-arrow">▶</span></button>
@@ -61,13 +82,6 @@
                     <!-- 由 game.js 动态生成 -->
                 </div>
             </div>
-            <!-- 更新日志 -->
-            <div class="submenu" data-submenu="changelog">
-                <button class="submenu-header" type="button">📋 更新日志 <span class="submenu-arrow">▶</span></button>
-                <div class="submenu-body">
-                    <div class="changelog-list" id="changelogList"></div>
-                </div>
-            </div>
             <!-- 对局记录 -->
             <div class="submenu" data-submenu="records">
                 <button class="submenu-header" type="button">📼 对局记录 <span class="submenu-arrow">▶</span></button>
@@ -75,11 +89,18 @@
                     <div class="records-list" id="recordsList"></div>
                 </div>
             </div>
-            <!-- Bug 反馈 -->
-            <div class="submenu" data-submenu="bugreport">
-                <button class="submenu-header" type="button">🐛 Bug 反馈 <span class="submenu-arrow">▶</span></button>
+            <!-- 更新日志 -->
+            <div class="submenu" data-submenu="changelog">
+                <button class="submenu-header" type="button">📋 更新日志 <span class="submenu-arrow">▶</span></button>
                 <div class="submenu-body">
-                    <textarea class="bug-input" id="bugInput" rows="3" placeholder="描述你遇到的问题..."></textarea>
+                    <div class="changelog-list" id="changelogList"></div>
+                </div>
+            </div>
+            <!-- 联系开发者 -->
+            <div class="submenu" data-submenu="contact">
+                <button class="submenu-header" type="button">📧 联系开发者 <span class="submenu-arrow">▶</span></button>
+                <div class="submenu-body">
+                    <textarea class="bug-input" id="bugInput" rows="3" placeholder="描述你遇到的问题或建议..."></textarea>
                     <button class="bug-submit" id="bugSubmit" type="button">发送反馈</button>
                     <span class="bug-hint" id="bugHint"></span>
                 </div>

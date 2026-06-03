@@ -848,20 +848,28 @@ class Minesweeper {
      * @param {number} c  起始列号
      */
     _floodReveal(r, c) {
-        for (const { r: nr, c: nc } of this._getNeighbors(r, c)) {
-            const neighbor = this.grid[nr][nc];
+        const grid = this.grid;
+        const rows = this.rows;
+        const cols = this.cols;
+        for (let dr = -1; dr <= 1; dr++) {
+            const nr = r + dr;
+            if (nr < 0 || nr >= rows) continue;
+            for (let dc = -1; dc <= 1; dc++) {
+                if (dr === 0 && dc === 0) continue;
+                const nc = c + dc;
+                if (nc < 0 || nc >= cols) continue;
+                const neighbor = grid[nr][nc];
 
-            // 跳过已揭开、已旗标、地雷
-            if (neighbor.state !== CellState.HIDDEN || neighbor.mine) {
-                continue;
-            }
+                // 跳过已揭开、已旗标、地雷
+                if (neighbor.state !== CellState.HIDDEN || neighbor.mine) continue;
 
-            // 揭开邻居
-            neighbor.state = CellState.REVEALED;
+                // 揭开邻居
+                neighbor.state = CellState.REVEALED;
 
-            // 仅当邻居也是 0 时才继续蔓延（1-8 是边界，揭开即止）
-            if (neighbor.adjacentMines === 0) {
-                this._floodReveal(nr, nc);
+                // 仅当邻居也是 0 时才继续蔓延（1-8 是边界，揭开即止）
+                if (neighbor.adjacentMines === 0) {
+                    this._floodReveal(nr, nc);
+                }
             }
         }
     }
@@ -904,9 +912,17 @@ class Minesweeper {
      */
     _countFlaggedNeighbors(r, c) {
         let count = 0;
-        for (const { r: nr, c: nc } of this._getNeighbors(r, c)) {
-            if (this.grid[nr][nc].state === CellState.FLAGGED) {
-                count++;
+        const grid = this.grid;
+        const rows = this.rows;
+        const cols = this.cols;
+        for (let dr = -1; dr <= 1; dr++) {
+            const nr = r + dr;
+            if (nr < 0 || nr >= rows) continue;
+            for (let dc = -1; dc <= 1; dc++) {
+                if (dr === 0 && dc === 0) continue;
+                const nc = c + dc;
+                if (nc < 0 || nc >= cols) continue;
+                if (grid[nr][nc].state === CellState.FLAGGED) count++;
             }
         }
         return count;
@@ -920,9 +936,19 @@ class Minesweeper {
      */
     _getHiddenNeighborKeys(r, c) {
         const keys = new Set();
-        for (const { r: nr, c: nc } of this._getNeighbors(r, c)) {
-            if (this.grid[nr][nc].state === CellState.HIDDEN) {
-                keys.add(`${nr},${nc}`);
+        const grid = this.grid;
+        const rows = this.rows;
+        const cols = this.cols;
+        for (let dr = -1; dr <= 1; dr++) {
+            const nr = r + dr;
+            if (nr < 0 || nr >= rows) continue;
+            for (let dc = -1; dc <= 1; dc++) {
+                if (dr === 0 && dc === 0) continue;
+                const nc = c + dc;
+                if (nc < 0 || nc >= cols) continue;
+                if (grid[nr][nc].state === CellState.HIDDEN) {
+                    keys.add(`${nr},${nc}`);
+                }
             }
         }
         return keys;
@@ -948,6 +974,7 @@ class Minesweeper {
         if (cellA.state !== CellState.REVEALED || cellA.adjacentMines <= 0) return new Set();
 
         const mA = cellA.adjacentMines - this._countFlaggedNeighbors(r, c);
+        if (mA < 0) return new Set(); // 旗标超过数字（用户误标），无法推演
         const sA = this._getHiddenNeighborKeys(r, c);
 
         if (sA.size === 0) return new Set();
@@ -981,6 +1008,7 @@ class Minesweeper {
 
                 // 推演：M_A = M_B → S_A \ S_B 绝对安全
                 const mB = cellB.adjacentMines - this._countFlaggedNeighbors(br, bc);
+                if (mB < 0) continue; // 旗标超过数字（用户误标），跳过此格
                 if (mA === mB) {
                     for (const key of sA) {
                         if (!sB.has(key)) safeKeys.add(key);
@@ -1052,6 +1080,7 @@ class Minesweeper {
         if (cellA.state !== CellState.REVEALED || cellA.adjacentMines <= 0) return new Set();
 
         const mA = cellA.adjacentMines - this._countFlaggedNeighbors(r, c);
+        if (mA < 0) return new Set(); // 旗标超过数字（用户误标），无法推演
         const sA = this._getHiddenNeighborKeys(r, c);
         if (sA.size === 0) return new Set();
 
@@ -1081,6 +1110,7 @@ class Minesweeper {
                 if (!isSubset) continue;
 
                 const mB = cellB.adjacentMines - this._countFlaggedNeighbors(br, bc);
+                if (mB < 0) continue; // 旗标超过数字（用户误标），跳过此格
                 const diffSize = sA.size - sB.size;
                 const diffMines = mA - mB;
 

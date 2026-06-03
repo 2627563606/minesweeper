@@ -22,20 +22,39 @@ index.html
   └── <script src="main.js">         ← DOMContentLoaded → init()
 ```
 
-- **Engine.js** (~1230 行)：纯数据逻辑。`CellState` 枚举、`createCell` 工厂、`ActionHistory`（环形缓冲区 + localStorage 持久化 + RLE 压缩编码）、`Minesweeper` 类（reveal / flag / chord / flood-fill / 首点安全布雷 / 集合子集推演 / 无死局求解器）。
-- **Renderer.js** (~400 行)：纯 UI 渲染。公告/更新日志配置与渲染、`renderBoard`、`renderCell`、`launchMineExplosion`、`launchConfetti`、`renderStatus`、`formatLCD`、`callbacks` 可变对象（供 Controller 挂载 `onGameEnd` 回调）。
-- **Controller.js** (~1400 行)：主题系统（`THEME_DEFAULTS` / `THEME_SECTIONS` / `loadTheme` / `saveTheme` / `renderSkinMenu`）、所有事件绑定（鼠标悬停/点击/中键/右键）、高亮锁定系统、计时器、回放、难度与模式偏好持久化、对局记录系统、`init()` 入口函数。
-- **main.js** (~10 行)：仅 `document.addEventListener('DOMContentLoaded', init)`。
+- **Engine.js** (1293 行)：纯数据逻辑。`CellState` 枚举、`createCell` 工厂、`ActionHistory`（环形缓冲区 + localStorage 持久化 + RLE 压缩编码）、`Minesweeper` 类（reveal / toggleFlag / chord / flood-fill / 首点安全布雷 / 集合子集推演 / 无死局求解器）。热路径中的邻居迭代（`_countFlaggedNeighbors`、`_getHiddenNeighborKeys`、`_floodReveal`）已内联以避免分配临时数组。
+- **Renderer.js** (464 行)：纯 UI 渲染。公告/更新日志配置与渲染、`renderBoard`（DocumentFragment 批量插入）、`renderCell`、`launchMineExplosion`、`shakeElement`（JS 驱动震动，叠加在拖动偏移量之上）、`launchConfetti`、`renderStatus`、`formatLCD`、`callbacks` 可变对象（供 Controller 挂载 `onGameEnd` 回调）。
+- **Controller.js** (1525 行)：主题系统（`THEME_DEFAULTS` / `THEME_SECTIONS` / `loadTheme` / `saveTheme` / `renderSkinMenu`）、所有事件绑定（鼠标悬停/点击/中键/右键 → mousedown 记录 + mouseup 执行）、高亮锁定系统、棋盘拖动、计时器、回放、棋盘缩放、难度与模式偏好持久化、对局记录系统、联系开发者反馈、`init()` 入口函数。
+- **main.js** (10 行)：仅 `document.addEventListener('DOMContentLoaded', init)`。
 
 所有符号均为全局作用域，依赖顺序由 `<script>` 标签顺序保证。
 
 ## 核心引擎 — Minesweeper 类
 
+### 公共方法
+
+| 方法 | 说明 |
+|---|---|
+| `reveal(r, c)` | 揭开格子，首次调用触发 `_generateMines`，0-邻格触发泛洪 |
+| `toggleFlag(r, c)` | 切换旗标（HIDDEN↔FLAGGED），已揭开格返回 `{success: false}` |
+| `chord(r, c)` | 和弦展开（旗数=数字时揭开剩余隐藏邻居），返回 `{success, reason?}` |
+| `smartReveal(r, c)` | 集合子集推演安全揭示，返回 `{success, revealed}` |
+| `smartFlag(r, c)` | 集合子集推演自动插旗，返回 `{success, flagged}` |
+| `reset()` | 重置游戏状态 |
+| `getGridSnapshot()` | 导出当前网格深拷贝 |
+
+### 属性
+
+- `flagCount` getter — 当前旗标数（遍历网格统计）
+- `remainingMines` getter — `totalMines - flagCount`
+- `gameOver` / `won` — 游戏结束/胜利标志
+- `generated` — 是否已执行首次布雷
+
 ### 首点安全 + 布雷
 `reveal(r, c)` 首次调用时触发 `_generateMines(safeR, safeC)`：以首次点击位置为中心标记 3×3 安全区，Fisher-Yates 洗牌后在候选格子中随机选取 `totalMines` 个放置地雷。
 
 ### 无死局模式
-构造函数 `new Minesweeper(rows, cols, mines, noGuess)` 接受第四个参数。开启后 `_generateMines` 会循环重试（最多 `15 + √(rows×cols) × 2` 次，上限 80），每次调用 `_validateNoGuess(safeR, safeC)` 运行求解器验证棋盘完全可推演。
+构造函数 `new Minesweeper(rows, cols, mines, noGuess)` 接受第四个参数。开启后 `_generateMines` 会循环重试（最多 `15 + √(rows×cols) × 2` 次，上限 80），每次调用 `_validateNoGuess(safeR, safeC)` 运行求解器验证棋盘完全可推演。若全部重试失败，以最后一次生成的棋盘为准（极度罕见）。
 
 求解器模拟完美玩家：先基本计数推演（剩余雷=0→安全；剩余雷=隐藏格数→全雷），再集合子集推演（S_B ⊂ S_A 且 M_A=M_B→差集安全；|S_A\S_B|=M_A−M_B→差集全雷），循环至无进展或全部揭开。
 
@@ -47,7 +66,7 @@ index.html
 
 ## ActionHistory — 持久化与压缩
 
-环形缓冲区（容量 10），每次 `push(type, r, c, gridSnapshot, totalMines)` 去抖写入 localStorage（2 秒合并窗口）；`clear()` 立即清除持久化数据；`flushSave()` 强制立即写入。
+环形缓冲区（容量 10），每次 `push(type, r, c, gridSnapshot, totalMines)` 去抖写入 localStorage（2 秒合并窗口）；`clear()` 立即清除持久化数据；`flushSave()` 强制立即写入。`getAll()` 返回所有条目。
 
 ### 压缩编码
 - **单格 1 字节**：`bit[7]=triggered, bit[6]=mine, bit[5:4]=state, bit[3:0]=adjacentMines+1`
@@ -58,21 +77,60 @@ index.html
 - `ActionHistory.loadSession(capacity)` — 从 localStorage 恢复实例（当前未在启动时自动调用，按需使用）
 - `ActionHistory.clearSession()` / `hasSavedSession()` — 管理持久化数据
 
-## 右键一键插旗 — 优先级链
+## 事件处理流程
 
-右键已翻开数字格时按以下顺序尝试，命中即 `return`：
+所有格子操作采用**两阶段模式**：`mousedown` 记录目标格子和按键 → `document mouseup` 执行操作。此设计确保拖动（移动超过 4px）与格子操作互斥——拖动开始时清除待处理操作。
 
-1. **基础条件**：剩余雷数 = 隐藏格数 → 全插旗（数学绝对正确，优先于集合子集以避免只插部分）
-2. **集合子集推演**（`smartFlag`）：S_B ⊂ S_A 且 |S_A\S_B| = M_A−M_B → 插旗差集
-3. **进阶条件**：排除锁定高亮区后，非高亮格数 = 剩余雷 − 高亮区含雷量 → 插旗非高亮区
+- `boardEl mousedown`：记录 `pendingCellAction = {button, r, c}`，右键/中键在此阶段调用 `preventDefault()`（必须在 mousedown 阶段阻止上下文菜单/自动滚动）。
+- `document mouseup`：若 `pendingCellAction` 仍存在（未被拖动清除）→ 执行对应操作。
+- `gameContainer mousedown`（左键）→ `document mousemove`：超过 4px 阈值 → 进入拖动模式，清除 `pendingCellAction`，更新 `transform: translate()`。
 
-全部不满足 → 绿框闪烁 (`cell--flag-reject`) 提示。
+### 左键
+- **隐藏格** → `game.reveal(r, c)` → 记录动作 → 重绘
+- **已揭开数字格** → `executeChord(r, c)`：
+  1. 优先 `game.chord(r, c)`（旗数=数字 → 揭开隐藏邻居）
+  2. 旗数不匹配 → 若 3×3 内有锁定高亮 → `game.smartReveal(r, c)`
+  3. 仍无安全格 → 红框震动（`cell--chord-reject`），`animationend` 后自动清除
+- `executeChord` 成功后自动调用 `checkFlagMatchAutoUnlock()` 解锁旗数已满的锁定格
+
+### 右键
+- **隐藏格** → `game.toggleFlag(r, c)` 切换旗标
+- **已揭开数字格** → 一键插旗（优先级顺序）：
+  1. **集合子集推演**（`smartFlag`）：S_B ⊂ S_A 且 |S_A\S_B| = M_A−M_B → 插旗差集。成功后额外检查：若剩余隐藏格全为雷（`postRemaining === postHidden.length`），一并补齐。
+  2. **基础条件回退**：若 smartFlag 未找到任何危险格，且剩余雷数 = 隐藏格数 → 全插旗
+  全部不满足 → 绿框闪烁（`cell--flag-reject`），`animationend` 后自动清除。
+
+### 中键
+切换 `lockedCells` 集合中的数字格（已揭开且 adjacentMines>0）。若该格旗数已等于数字则忽略。触发 `refreshLockedHighlights()` 重铺所有锁定高亮。
+
+### INPUT_CONFIG 常量
+```js
+const INPUT_CONFIG = {
+    chordButton: 1,    // 中键
+    revealButton: 0,   // 左键
+    flagButton: 2,     // 右键
+};
+```
 
 ## 悬停高亮与锁定系统
 
-- **悬停**（`mouseover`）：`applyHoverHighlight(r, c)` 清除全盘 → 重铺锁定高亮 → 叠加当前悬停高亮（优先级覆盖，数值越小优先级越高）。
-- **中键锁定**（`mousedown button=1`）：切换 `lockedCells` 集合，触发 `refreshLockedHighlights()`（清除全部 → 重铺锁定高亮）。
+### 高亮优先级
+7 级悬停高亮 CSS 类：`cell--hover-1` 到 `cell--hover-7`，外加 `cell--hover-safe`（0 级，绿色）。优先级数值越小越高（0 最高），通过 `dataset.highlightPriority` 属性追踪。
+
+- **悬停**（`mouseover`，requestAnimationFrame 节流）：`applyHoverHighlight(r, c)` 清除全盘 → 重铺锁定高亮 → 叠加当前悬停高亮（优先级覆盖）。
+- **中键锁定**：切换 `lockedCells` 集合 → `refreshLockedHighlights()`（清除全部 → 重铺锁定）。
 - **智能安全区**（白色 `cell--smart-safe`）：仅在悬定格 3×3 内有锁定高亮时激活，且仅显示由附近锁定格参与推演的安全格（通过 `candidateFilter` 过滤，避免远端无关数字格的偶然推演结果）。
+- **自动解锁**：`checkFlagMatchAutoUnlock()` 遍历所有锁定格，若邻居旗数已等于数字则自动从 `lockedCells` 中移除；若格子不再满足锁定条件（非 REVEALED 或 adjacentMines≤0）也自动移除。
+
+### 高亮集合跟踪
+`highlightedCells`（Set<HTMLElement>）和 `smartSafeCells`（Set<HTMLElement>）替代 `querySelectorAll('[data-highlight-priority]')` 的 DOM 遍历。`applyHighlightToEl`/`removeHighlightFromEl`/`clearAllHighlights` 自动维护集合。
+
+## 棋盘缩放系统（Ctrl + 滚轮）
+
+- CSS 变量 `--cell-size`（格子尺寸，px）和 `--cell-font-size`（字号，px）控制棋盘视觉缩放
+- 范围 16–48px，默认 28px，步长 2px，字号按 16/28 比例同步缩放
+- 缩放级别持久化到 `minesweeper-preferences` 的 `zoomLevel` 字段
+- `setZoomLevel(level)` → 写入 CSS 变量并更新 `currentZoom`
 
 ## 回放系统
 
@@ -92,35 +150,65 @@ index.html
 
 ## 偏好持久化
 
-`init()` 启动时从 `minesweeper-preferences` 恢复上次的难度选择和"无死局模式"开关状态，并在每次变更时自动保存。自定义难度的行/列/雷数参数一并持久化。
+`init()` 启动时从 `minesweeper-preferences` 恢复上次的难度选择、"无死局模式"开关状态和棋盘缩放级别，并在每次变更时自动保存。自定义难度的行/列/雷数参数一并持久化。
 
 ## 设置菜单层级
 
-三级手风琴结构：
+菜单项固定顺序（从上到下），三级手风琴结构：
+
+| 序号 | 菜单项 | 说明 |
+|---|---|---|
+| 1 | 📢 公告 | 始终置顶 |
+| 2 | 🎓 新手指引 | 操作速查表 + 实用提示，永久第二位 |
+| 3 | 🎯 难度 | 简单/中等/困难/自定义 |
+| 4 | 🧩 游戏模式 | 无死局开关 |
+| 5 | 🎨 换肤 | 唯一的三级手风琴（`.skin-section-header`） |
+| 6 | 📼 对局记录 | 最近 10 局，支持查看回放 |
+| 7 | 📋 更新日志 | 永久倒数第二位 |
+| 8 | 📧 联系开发者 | 永久末位（原 Bug 反馈） |
 
 - **一级**：⚙ 齿轮按钮 → `settingsMenu.classList.toggle('open')`
-- **二级**：`.submenu-header` → 折叠/展开，含：📢 公告、🎯 难度、🧩 游戏模式（无死局开关）、🎨 换肤、📼 对局记录、📋 更新日志、🐛 Bug 反馈
+- **二级**：`.submenu-header` → 折叠/展开
 - **三级**（仅换肤）：`.skin-section-header` → 手风琴式颜色分组
 
 **外部点击关闭**（`document.addEventListener('mousedown', …)`，使用 `mousedown` 而非 `click` 因为棋盘 `renderBoard` 在 mousedown 中替换 DOM 会导致 click 事件丢失）：
 1. 第一次 → 优先关闭三级换肤菜单
 2. 第二次 → 关闭整个设置面板
 
+## 棋盘拖动系统
+
+- 左键在 `.game-container` 上拖动（交互元素除外的任意位置），移动距离超过 4px 阈值即进入拖动模式
+- 通过 `transform: translate()` 偏移棋盘，不影响设置菜单（位于容器外部）
+- 拖动开始时清除 `pendingCellAction`，确保拖动与格子操作互斥
+- 位置仅保存在内存（`boardTranslateX`/`boardTranslateY`），刷新后复位至居中
+
+## 联系开发者
+
+设置菜单中的 📧 联系开发者子菜单（`data-submenu="contact"`）包含 `textarea` + 发送按钮。通过 `navigator.sendBeacon` 发送到 Web3Forms 端点。
+
+### 爆炸震动
+
+失败时 `shakeElement(container, 500)` 通过 `requestAnimationFrame` 驱动叠加震动（在现有 `transform` 之上增加衰减的正弦/余弦偏移），避免 CSS 动画覆盖拖动偏移量。
+
 ## CSS 变量与换肤
 
 `style.css` 在 `[data-theme="classic"]` 块声明 26 个 CSS 自定义属性。换肤系统通过 `<html>` 行内 `style.setProperty` 覆盖，优先级高于 CSS 中的默认值。支持 `#rgb`/`#rrggbb`/`#rrggbbaa`/`transparent` 格式，非法值静默回退。
 
-数字色通过 `[data-num="N"]` 选择器应用，背景色通过 `.cell--revealed[data-num="N"]` 覆盖。7 级悬停高亮 (`cell--hover-1` ~ `cell--hover-7`) 和智能安全区 (`cell--smart-safe`) 使用硬编码 `rgba()` 色值，不在换肤覆盖范围内。
+数字色通过 `[data-num="N"]` 选择器应用，背景色通过 `.cell--revealed[data-num="N"]` 覆盖。7 级悬停高亮（`cell--hover-1` ~ `cell--hover-7`）和智能安全区（`cell--smart-safe`）使用硬编码 `rgba()` 色值，不在换肤覆盖范围内。
 
 ## 性能优化要点
 
 以下优化已实施，修改时注意保持：
 
+- **DocumentFragment 批量渲染**：`renderBoard` 使用 `DocumentFragment` + `replaceChildren` 单次 DOM 插入（原先 N×M 次 `appendChild`）。直接读取 `game.grid` 避免 `getGridSnapshot()` 深拷贝开销。
+- **gridTemplateColumns 缓存**：仅列数变化时更新内联样式，避免每次渲染都触发样式重算。
+- **CSS 容器隔离**：`.cell` 和 `.game-board` 均设置 `contain: layout style`，将局部变化与全局布局隔离。
 - **格子 DOM 缓存**：`cellElements[r][c]` 二维数组（Renderer.js 声明，`renderBoard` 填充），Controller 中所有棋盘格子的 `querySelector` 查找已替换为 O(1) 数组访问。`renderBoard` 重建 DOM 时必须同步重建缓存。
-- **高亮集合跟踪**：`highlightedCells`（Set<HTMLElement>）和 `smartSafeCells`（Set<HTMLElement>）替代 `querySelectorAll('[data-highlight-priority]')` 的 DOM 遍历。`applyHighlightToEl`/`removeHighlightFromEl` 自动维护集合。
+- **高亮集合跟踪**：`highlightedCells`（Set<HTMLElement>）和 `smartSafeCells`（Set<HTMLElement>）替代 `querySelectorAll('[data-highlight-priority]')` 的 DOM 遍历。`applyHighlightToEl`/`removeHighlightFromEl` 自动维护集合。`clearAllHighlights()` 在集合元素已脱离 DOM 时自动跳过 DOM 操作（`el.isConnected` 检测）。
+- **热路径内联**：`_countFlaggedNeighbors`、`_getHiddenNeighborKeys`、`_floodReveal` 直接内联 3×3 邻域迭代，避免每次调用的临时数组和对象分配。
 - **动作历史去抖持久化**：`ActionHistory._scheduleSave()` 将 localStorage 写入延迟 2 秒合并，避免每次操作都触发同步 I/O。`flushSave()` 可强制立即写入。
 - **悬停节流**：`mouseover` 使用 `requestAnimationFrame` 节流，每帧最多执行一次高亮重算。`mouseleave` 和新游戏时取消待执行帧回调。
-- **CSS 动画 GPU 加速**：`ring-expand` 不再动画化 `border-width`（避免 layout），仅 `transform` + `opacity`。`replay-breathe` 使用 `::after` 伪元素的 `opacity` 替代 `box-shadow` 动画（避免 paint）。
+- **CSS 动画 GPU 加速**：`ring-expand` 仅使用 `transform` + `opacity`（避免 layout）。`replay-breathe` 使用 `::after` 伪元素的 `opacity` 替代 `box-shadow` 动画（避免 paint）。
 
 ## localStorage 键
 
@@ -128,8 +216,15 @@ index.html
 |---|---|---|
 | `minesweeper-theme` | 换肤配色 | JSON，键=CSS 变量名，值=hex |
 | `minesweeper-history` | 压缩动作历史 | JSON `{v:1, mines, capacity, entries:[{type, r, c, ts, g:{w, h, d:[RLE]}}]}` |
-| `minesweeper-preferences` | 难度与模式偏好 | JSON `{difficulty, noGuessMode, customRows?, customCols?, customMines?}` |
+| `minesweeper-preferences` | 难度与模式偏好 | JSON `{difficulty, noGuessMode, zoomLevel, customRows?, customCols?, customMines?}` |
 | `minesweeper-records` | 对局记录（最近 10 局，每局最后 10 步） | JSON `{v:1, records:[{id, outcome, difficulty, rows, cols, mines, elapsed, date, steps:[{type, r, c, ts, g:{w,h,d:[RLE]}}]}]}` |
+
+## Renderer.js 数据与结构
+
+- `ANNOUNCEMENTS` — 公告数组，每项 `{date, text}`，由 `renderAnnouncements()` 渲染到设置面板
+- `CHANGELOG` — 更新日志数组，每项 `{version, date, entries:[]}`，由 `renderChangelog()` 渲染
+- `callbacks` — 可变对象 `{onGameEnd: null}`，Controller 在 `init()` 中挂载回调
+- `cellElements` — `[][]HTMLElement` 二维数组，`renderBoard` 填充，Controller 中 O(1) 访问
 
 ## 语言约定
 

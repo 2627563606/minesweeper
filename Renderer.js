@@ -17,12 +17,20 @@
 
 const ANNOUNCEMENTS = [
     {
-        date: '2026-06-01',
-        text: 'Phase 3 上线：死亡回放系统已部署，踩雷后可逐步回溯对局。',
+        date: '2026-06-03',
+        text: '新手指引已上线：设置菜单第二项可查看完整操作指南。',
+    },
+    {
+        date: '2026-06-03',
+        text: '棋盘支持左键拖动：拖拽游戏区域可任意摆放位置，刷新后复位。',
     },
     {
         date: '2026-06-01',
-        text: '智能推演引擎已就绪：悬停数字可自动计算安全区与危险区。',
+        text: '智能推演引擎就绪：悬停数字可自动计算安全区与危险区。',
+    },
+    {
+        date: '2026-06-01',
+        text: 'Phase 3 上线：死亡回放系统已部署，踩雷后可逐步回溯对局。',
     },
     // 新公告加在最前面，旧公告自动下沉
 ];
@@ -52,6 +60,18 @@ function renderAnnouncements() {
 // ============================================================
 
 const CHANGELOG = [
+    {
+        version: 'v0.4.0',
+        date: '2026-06-03',
+        entries: [
+            '棋盘左键拖动：任意摆放位置，刷新后自动复位',
+            '揭开 / 插旗改为松开鼠标时触发，与拖动操作互斥',
+            '右键一键插旗重构：子集推演优先，基础条件兜底',
+            '集合推演增加旗标溢出防护',
+            '新增新手指引面板，设置菜单第二项永久置顶',
+            '更新日志固定于菜单倒数第二位置，Bug 反馈更名"联系开发者"',
+        ],
+    },
     {
         version: 'v0.3.0',
         date: '2026-06-01',
@@ -177,39 +197,73 @@ function renderCell(el, cell) {
 }
 
 /**
- * 全量渲染棋盘
+ * 全量渲染棋盘（DocumentFragment 批量插入，单次 DOM 操作）
  * @param {import('./Engine.js').Minesweeper} game
  */
 function renderBoard(game) {
     const boardEl = document.getElementById('gameBoard');
-    const snapshot = game.getGridSnapshot();
+    const rows = game.rows;
+    const cols = game.cols;
+    const grid = game.grid; // 直接读取，避免 getGridSnapshot() 深拷贝开销
 
-    // 设置网格列数
-    boardEl.style.gridTemplateColumns = `repeat(${game.cols}, var(--cell-size))`;
-
-    // 清空
-    boardEl.innerHTML = '';
-
-    // 重建缓存数组
-    cellElements = new Array(game.rows);
-    for (let r = 0; r < game.rows; r++) {
-        cellElements[r] = new Array(game.cols);
+    // 仅在列数变化时更新 grid-template（避免冗余样式重算）
+    const neededCols = `repeat(${cols}, var(--cell-size))`;
+    if (boardEl.style.gridTemplateColumns !== neededCols) {
+        boardEl.style.gridTemplateColumns = neededCols;
     }
 
-    // 逐格生成
-    for (let r = 0; r < game.rows; r++) {
-        for (let c = 0; c < game.cols; c++) {
-            const el = createCellElement(r, c);
-            renderCell(el, snapshot[r][c]);
-            cellElements[r][c] = el;
-            boardEl.appendChild(el);
+    // 预分配缓存数组
+    cellElements = new Array(rows);
+
+    // 使用 DocumentFragment 批量构建，单次插入 DOM
+    const frag = document.createDocumentFragment();
+    for (let r = 0; r < rows; r++) {
+        const row = cellElements[r] = new Array(cols);
+        const gridRow = grid[r];
+        for (let c = 0; c < cols; c++) {
+            const el = document.createElement('div');
+            el.className = 'cell';
+            el.dataset.row = r;
+            el.dataset.col = c;
+            renderCell(el, gridRow[c]);
+            row[c] = el;
+            frag.appendChild(el);
         }
     }
+
+    boardEl.replaceChildren(frag);
 }
 
 // ============================================================
 //  动画效果
 // ============================================================
+
+/**
+ * 震动元素（在现有 transform 之上叠加衰减抖动，结束后恢复原位）
+ * @param {HTMLElement} el
+ * @param {number} [duration=500] 持续时间 ms
+ */
+function shakeElement(el, duration = 500) {
+    const origTransform = el.style.transform || '';
+    const start = performance.now();
+
+    function tick(now) {
+        const elapsed = now - start;
+        if (elapsed >= duration) {
+            el.style.transform = origTransform;
+            return;
+        }
+        const t = elapsed / duration;
+        const decay = 1 - t; // 线性衰减
+        const sx = Math.sin(t * Math.PI * 7.3) * decay * 8;
+        const sy = Math.cos(t * Math.PI * 8.7) * decay * 6;
+        const extra = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px)`;
+        el.style.transform = origTransform ? `${origTransform} ${extra}` : extra;
+        requestAnimationFrame(tick);
+    }
+
+    requestAnimationFrame(tick);
+}
 
 /**
  * 失败爆炸动画
@@ -230,11 +284,10 @@ function launchMineExplosion(mineRC, onDone) {
         cellEl.classList.add('cell--mine-hit');
     }
 
-    // 震屏
+    // 震屏（叠加在拖动偏移之上，使用 JS 驱动避免覆盖 drag transform）
     const container = document.querySelector('.game-container');
     if (container) {
-        container.classList.add('explosion-shake');
-        setTimeout(() => container.classList.remove('explosion-shake'), 500);
+        shakeElement(container, 500);
     }
 
     // 红色闪光

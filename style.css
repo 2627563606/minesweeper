@@ -93,6 +93,13 @@ body {
     align-items: center;
     gap: 8px;
     position: relative;
+    cursor: grab;
+    user-select: none;
+    will-change: transform;
+}
+
+.game-container--dragging {
+    cursor: grabbing;
 }
 
 /* ---- 设置菜单 ---- */
@@ -395,7 +402,50 @@ body {
     color: var(--color-text-primary);
 }
 
-/* ---- Bug 反馈 ---- */
+/* ---- 新手指引 ---- */
+.guide-content {
+    padding: 4px 0;
+}
+
+.guide-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.guide-table td {
+    padding: 3px 6px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--color-text-primary);
+    vertical-align: top;
+}
+
+.guide-key {
+    width: 100px;
+    font-weight: 700;
+    font-family: "Consolas", monospace;
+    color: var(--color-text-title);
+    text-align: right;
+    padding-right: 10px;
+    white-space: nowrap;
+}
+
+.guide-divider {
+    margin: 8px 0;
+    border: none;
+    border-top: 1px solid var(--color-border-dark);
+    opacity: 0.4;
+}
+
+.guide-tip {
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--color-text-primary);
+    opacity: 0.7;
+    margin: 4px 0;
+}
+
+/* ---- 联系开发者 ---- */
 .bug-input {
     width: 100%;
     padding: 4px 6px;
@@ -514,6 +564,7 @@ body {
     border: 3px solid;
     border-color: var(--color-border-light) var(--color-border-dark)
                   var(--color-border-dark) var(--color-border-light);
+    contain: layout style;
 }
 
 /* ---- 单元格 · 多图层架构 ---- */
@@ -539,6 +590,9 @@ body {
     font-weight: var(--cell-font-weight);
     line-height: 1;
     transition: none; /* 扫雷不需要过渡动画 */
+
+    /* 性能：隔离格子内部变化，避免触发全局 layout/paint */
+    contain: layout style;
 }
 
 /* 未揭开状态 · hover 微反馈 */
@@ -849,23 +903,6 @@ body {
 /* ---- 失败爆炸动画 ---- */
 
 /* 全屏震屏 */
-@keyframes board-shake {
-    0%, 100% { transform: translate(0, 0); }
-    10%      { transform: translate(-8px, -5px); }
-    20%      { transform: translate(7px, 6px); }
-    30%      { transform: translate(-6px, -8px); }
-    40%      { transform: translate(8px, 4px); }
-    50%      { transform: translate(-5px, 7px); }
-    60%      { transform: translate(6px, -6px); }
-    70%      { transform: translate(-7px, 5px); }
-    80%      { transform: translate(4px, -4px); }
-    90%      { transform: translate(-3px, 3px); }
-}
-
-.explosion-shake {
-    animation: board-shake 0.5s ease-out;
-}
-
 /* 红色闪光层 */
 .explosion-flash {
     position: fixed;
